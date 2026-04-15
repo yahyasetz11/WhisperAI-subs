@@ -82,87 +82,18 @@ def create_srt(segments):
     
     return srt_content
 
-# Fungsi untuk membuat bahasa Indonesia lebih natural/sehari-hari
-def make_natural_indonesian(text):
-    # Kamus kata formal ke sehari-hari (lebih moderat)
-    natural_dict = {
-        # Kata ganti - tetap formal untuk kesopanan
-        "saya": "saya",
-        "anda": "Anda",
-        
-        # Kata kerja yang umum diganti dalam percakapan sehari-hari
-        "telah": "sudah",
-        "sedang": "lagi",
-        "ingin": "mau",
-        "dapat": "bisa",
-        "berkata": "bilang",
-        "mengatakan": "bilang",
-        "melihat": "lihat",
-        "mengerti": "ngerti",
-        "memberi": "kasih",
-        "mengambil": "ambil",
-        "melakukan": "lakukan",
-        
-        # Kata sambung dan keterangan
-        "tetapi": "tapi",
-        "namun": "tapi",
-        "hanya": "cuma",
-        "sangat": "sangat",
-        "sekali": "sekali",
-        "sebentar": "sebentar",
-        "sekarang": "sekarang",
-        "kemarin": "kemarin",
-        
-        # Kata tanya
-        "mengapa": "kenapa",
-        "bagaimana": "gimana",
-        
-        # Ekspresi umum
-        "terima kasih": "terima kasih",
-        "maaf": "maaf",
-        "baik": "baik",
-        "benar": "benar",
-        
-        # Kata sifat
-        "cantik": "cantik",
-        "tampan": "tampan",
-        "bagus": "bagus",
-
-        # Kata lainnya
-        "varietas": "variety",
-    }
-    
-    # Ubah kata formal ke natural
-    natural_text = text
-    for formal, natural in natural_dict.items():
-        # Ganti kata lengkap saja (dengan batas kata)
-        natural_text = natural_text.replace(f" {formal} ", f" {natural} ")
-        
-        # Cek kata di awal teks
-        if natural_text.startswith(f"{formal} "):
-            natural_text = natural_text.replace(f"{formal} ", f"{natural} ", 1)
-        
-        # Cek kata di akhir teks
-        if natural_text.endswith(f" {formal}"):
-            natural_text = natural_text[:-len(f" {formal}")] + f" {natural}"
-        
-        # Ganti kata jika itu adalah satu-satunya kata dalam teks
-        if natural_text == formal:
-            natural_text = natural
-    
-    # Tambahkan partikel yang natural tapi tidak berlebihan
-    if "." in natural_text and len(natural_text) > 30:
-        sentences = natural_text.split(".")
-        for i in range(len(sentences) - 1):
-            # Hanya tambahkan partikel pada 20% kalimat untuk terasa natural
-            if len(sentences[i]) > 15 and not sentences[i].endswith(("sih", "ya", "kok", "lho")):
-                import random
-                if random.random() < 0.2:  # 20% peluang
-                    suffix = random.choice(["ya", "kok", "lho"])
-                    sentences[i] = sentences[i] + " " + suffix
-        natural_text = ".".join(sentences)
-    
-    return natural_text
+TRANSLATION_SYSTEM_PROMPT = (
+    "Kamu adalah penerjemah subtitle dari bahasa Jepang ke bahasa Indonesia. "
+    "Terjemahkan setiap dialog dalam tanda [Dialog X] ke bahasa Indonesia.\n\n"
+    "Aturan gaya bahasa:\n"
+    "- Gunakan \"aku/kamu\" bukan \"saya/Anda\"\n"
+    "- Pakai bahasa sehari-hari yang santai seperti ngobrol sama teman\n"
+    "- Hindari bahasa baku/formal (jangan pakai \"telah\", \"namun\", \"dapat\", dll)\n"
+    "- Hindari slang berat Jakarta (jangan pakai \"gue/lu\", \"anjir\", dll)\n"
+    "- Singkat dan natural, seperti subtitle anime fansub\n"
+    "- Jaga konteks antar dialog agar cerita tetap nyambung\n\n"
+    "Pertahankan format [Dialog X] agar bisa dicocokkan kembali."
+)
 
 def get_api_key_from_config(config_file):
     """Membaca API key dari file config.ini"""
@@ -348,11 +279,7 @@ def process_translate_srt_method(client, input_srt, model, batch_size=5):
                 messages=[
                     {
                         "role": "system",
-                        "content": "Kamu adalah penerjemah subtitle profesional dari bahasa Jepang ke bahasa Indonesia. "
-                                   "Terjemahkan setiap subtitle dalam tanda [Subtitle X] ke bahasa Indonesia yang natural, sopan, dan mudah dipahami. "
-                                   "Pertahankan format [Subtitle X] agar bisa dicocokkan kembali ke segmen aslinya. "
-                                   "Jaga konteks antar subtitle agar cerita tetap nyambung. "
-                                   "Gunakan bahasa Indonesia sehari-hari yang tidak terlalu formal tapi tetap sopan."
+                        "content": TRANSLATION_SYSTEM_PROMPT.replace("[Dialog X]", "[Subtitle X]")
                     },
                     {"role": "user", "content": combined_text}
                 ],
@@ -398,13 +325,10 @@ def process_translate_srt_method(client, input_srt, model, batch_size=5):
                     print(f"  Warning: Subtitle {batch_start + i + 1} gagal diterjemahkan, menggunakan text original")
                     translated = seg['text']
                 
-                # Apply natural Indonesian
-                natural_translated = make_natural_indonesian(translated)
-                
                 translated_segments.append({
                     'start': seg['start'],
                     'end': seg['end'],
-                    'text': natural_translated
+                    'text': translated
                 })
             
             # Delay between batches to avoid rate limits
@@ -460,9 +384,7 @@ def process_transcribe_method(client, input_file, model, whisper_model, batch_si
             messages=[
                 {
                     "role": "system",
-                    "content": "Kamu adalah penerjemah subtitle dari bahasa Jepang ke bahasa Indonesia. "
-                               "Terjemahkan setiap dialog dalam tanda [Dialog X] ke bahasa Indonesia yang natural, sopan, dan mudah dipahami. "
-                               "Pertahankan format [Dialog X] agar bisa dicocokkan kembali ke segmen aslinya."
+                    "content": TRANSLATION_SYSTEM_PROMPT
                 },
                 {"role": "user", "content": combined_text}
             ],
@@ -499,11 +421,10 @@ def process_transcribe_method(client, input_file, model, whisper_model, batch_si
             translated = translated_dialogs.get(dialog_num, '')
             if not translated:
                 translated = seg.text  # fallback
-            natural_translated = make_natural_indonesian(translated)
             new_segment = {
                 "start": seg.start,
                 "end": seg.end,
-                "text": natural_translated
+                "text": translated
             }
             translated_segments.append(new_segment)
 
@@ -649,7 +570,7 @@ def process_translate_method(client, input_file, model, whisper_model, batch_siz
                     original_text = seg.get('text', '')
                 else:
                     original_text = str(seg)
-                paraphrased = make_natural_indonesian(original_text)
+                paraphrased = original_text
             
             # Extract timing info safely
             if hasattr(seg, 'start'):
