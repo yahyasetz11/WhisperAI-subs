@@ -6,6 +6,7 @@ from datetime import timedelta
 import argparse
 from openai import OpenAI
 import configparser
+from faster_whisper import WhisperModel
 
 # Fungsi untuk mengubah detik ke format waktu SRT (HH:MM:SS,mmm)
 def format_time(seconds):
@@ -203,6 +204,38 @@ def get_mime_type(filename):
     }
     return mime_types.get(ext, 'audio/wav')
 
+def transcribe_local(audio_path, model_name="kotoba-tech/kotoba-whisper-v2.0", device="cuda", compute_type="float16"):
+    """Transcribe Japanese audio using local faster-whisper model.
+
+    Returns list of segments with 'start', 'end', 'text' keys.
+    """
+    print(f"Loading model: {model_name} (device={device}, compute_type={compute_type})")
+    model = WhisperModel(model_name, device=device, compute_type=compute_type)
+
+    print("Transcribing with VAD filter...")
+    segments_iter, info = model.transcribe(
+        audio_path,
+        language="ja",
+        vad_filter=True,
+        vad_parameters=dict(
+            min_silence_duration_ms=500,
+            speech_pad_ms=200,
+        ),
+    )
+
+    print(f"Detected language: {info.language} (probability: {info.language_probability:.2f})")
+
+    segments = []
+    for seg in segments_iter:
+        segments.append({
+            'start': seg.start,
+            'end': seg.end,
+            'text': seg.text.strip()
+        })
+
+    print(f"Transcription complete! Total segments: {len(segments)}")
+    return segments
+
 # NEW: Transcribe only method (no translation)
 def process_transcribe_only_method(client, input_file, whisper_model):
     """Method to only transcribe Japanese audio without translation"""
@@ -302,8 +335,10 @@ def process_translate_srt_method(client, input_srt, model, batch_size=5):
         batch_texts = []
         for i, seg in enumerate(batch_segments):
             text = seg['text']
+            # Remove null bytes and control characters that break JSON serialization
+            text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
             batch_texts.append(f"[Subtitle {i+1}] {text}")
-        
+
         combined_text = "\n".join(batch_texts)
         
         # Send to GPT for batch translation
@@ -413,6 +448,8 @@ def process_transcribe_method(client, input_file, model, whisper_model, batch_si
         batch_texts = []
         for i, seg in enumerate(batch_segments):
             text = seg.text if hasattr(seg, 'text') else seg.get('text', '')
+            # Remove null bytes and control characters that break JSON serialization
+            text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
             batch_texts.append(f"[Dialog {i+1}] {text.strip()}")
 
         combined_text = "\n".join(batch_texts)
@@ -547,8 +584,10 @@ def process_translate_method(client, input_file, model, whisper_model, batch_siz
                 text = seg.get('text', '')
             else:
                 text = str(seg)  # Fallback
+            # Remove null bytes and control characters that break JSON serialization
+            text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
             batch_texts.append(f"[Dialog {i+1}] {text.strip()}")
-        
+
         combined_text = "\n".join(batch_texts)
         
         # Paraphrase batch dengan GPT
