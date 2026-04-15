@@ -288,23 +288,23 @@ def process_translate_srt_method(client, input_srt, model, batch_size=5):
     
     return translated_segments
 
-def process_transcribe_method(client, input_file, model, whisper_model, batch_size=5):
-    print("Menggunakan metode: Transcribe (Whisper) + Translate (GPT-4o dengan batching)")
-    
-    with open(input_file, "rb") as audio_file:
-        transcription = client.audio.transcriptions.create(
-            file=audio_file,
-            model=whisper_model,
-            language="ja",
-            response_format="verbose_json"
-        )
+def process_transcribe_method(client, input_file, model, whisper_model, batch_size, device, compute_type):
+    """Transcribe Japanese audio locally, then translate to Indonesian via GPT."""
+    print("Menggunakan metode: Transcribe (Local) + Translate (GPT)")
+    print(f"Model Whisper: {whisper_model}")
+    print(f"Model translasi: {model}")
 
-    segments = transcription.segments if hasattr(transcription, 'segments') else []
+    # Step 1: Local transcription
+    segments = transcribe_local(input_file, whisper_model, device, compute_type)
+
     if not segments:
         print("Tidak ada segmen ditemukan.")
         return []
 
-    print(f"Total segmen ditemukan: {len(segments)}")
+    print(f"\nTotal segmen: {len(segments)}")
+    print("Memulai translasi ke bahasa Indonesia...")
+
+    # Step 2: Translate in batches via GPT
     translated_segments = []
 
     for batch_start in range(0, len(segments), batch_size):
@@ -313,67 +313,67 @@ def process_transcribe_method(client, input_file, model, whisper_model, batch_si
 
         print(f"Menerjemahkan batch {batch_start//batch_size + 1} (segmen {batch_start+1}-{batch_end})...")
 
-        # Gabungkan teks dengan penanda [Dialog X]
         batch_texts = []
         for i, seg in enumerate(batch_segments):
-            text = seg.text if hasattr(seg, 'text') else seg.get('text', '')
-            # Remove null bytes and control characters that break JSON serialization
-            text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
-            batch_texts.append(f"[Dialog {i+1}] {text.strip()}")
+            text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', seg['text'])
+            batch_texts.append(f"[Dialog {i+1}] {text}")
 
         combined_text = "\n".join(batch_texts)
 
-        # Kirim ke GPT untuk batch translate
-        chat_completion = client.chat.completions.create(
-            model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": TRANSLATION_SYSTEM_PROMPT
-                },
-                {"role": "user", "content": combined_text}
-            ],
-            temperature=0.6
-        )
+        try:
+            chat_completion = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": TRANSLATION_SYSTEM_PROMPT},
+                    {"role": "user", "content": combined_text}
+                ],
+                temperature=0.6
+            )
 
-        result_text = chat_completion.choices[0].message.content.strip()
+            result_text = chat_completion.choices[0].message.content.strip()
 
-        # Parsing hasil terjemahan
-        translated_dialogs = {}
-        current_dialog = None
-        current_text = []
+            # Parse translation results
+            translated_dialogs = {}
+            current_dialog = None
+            current_text = []
 
-        for line in result_text.split('\n'):
-            if line.strip().startswith('[Dialog'):
-                if current_dialog is not None:
-                    translated_dialogs[current_dialog] = ' '.join(current_text).strip()
-                try:
-                    dialog_num = int(line.split(']')[0].split()[-1])
-                    current_dialog = dialog_num
-                    text_after = line.split(']', 1)[1].strip() if ']' in line else ''
-                    current_text = [text_after] if text_after else []
-                except:
-                    continue
-            elif current_dialog is not None:
-                current_text.append(line.strip())
+            for line in result_text.split('\n'):
+                if line.strip().startswith('[Dialog'):
+                    if current_dialog is not None:
+                        translated_dialogs[current_dialog] = ' '.join(current_text).strip()
+                    try:
+                        dialog_num = int(line.split(']')[0].split()[-1])
+                        current_dialog = dialog_num
+                        text_after = line.split(']', 1)[1].strip() if ']' in line else ''
+                        current_text = [text_after] if text_after else []
+                    except:
+                        continue
+                elif current_dialog is not None and line.strip():
+                    current_text.append(line.strip())
 
-        if current_dialog is not None:
-            translated_dialogs[current_dialog] = ' '.join(current_text).strip()
+            if current_dialog is not None:
+                translated_dialogs[current_dialog] = ' '.join(current_text).strip()
 
-        # Masukkan hasil ke translated_segments
-        for i, seg in enumerate(batch_segments):
-            dialog_num = i + 1
-            translated = translated_dialogs.get(dialog_num, '')
-            if not translated:
-                translated = seg.text  # fallback
-            new_segment = {
-                "start": seg.start,
-                "end": seg.end,
-                "text": translated
-            }
-            translated_segments.append(new_segment)
+            for i, seg in enumerate(batch_segments):
+                dialog_num = i + 1
+                translated = translated_dialogs.get(dialog_num, '')
+                if not translated:
+                    print(f"  Warning: Dialog {batch_start + i + 1} gagal diterjemahkan, menggunakan text original")
+                    translated = seg['text']
 
-        time.sleep(1)  # Jeda antar batch
+                translated_segments.append({
+                    'start': seg['start'],
+                    'end': seg['end'],
+                    'text': translated
+                })
+
+            if batch_end < len(segments):
+                time.sleep(1)
+
+        except Exception as e:
+            print(f"  Error saat menerjemahkan batch: {str(e)}")
+            for seg in batch_segments:
+                translated_segments.append(seg)
 
     return translated_segments
 
