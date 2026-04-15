@@ -168,73 +168,18 @@ def transcribe_local(audio_path, model_name="kotoba-tech/kotoba-whisper-v2.0", d
     return segments
 
 # NEW: Transcribe only method (no translation)
-def process_transcribe_only_method(client, input_file, whisper_model):
-    """Method to only transcribe Japanese audio without translation"""
+def process_transcribe_only_method(input_file, whisper_model, device, compute_type):
+    """Transcribe Japanese audio without translation using local model."""
     print("Menggunakan metode: Transcribe Only (Japanese)")
-    print(f"Model Whisper: {whisper_model}")
-    print("Melakukan transkripsi bahasa Jepang...")
-    
-    with open(input_file, "rb") as audio_file:
-        try:
-            # Try verbose_json for segments with timing
-            transcription = client.audio.transcriptions.create(
-                file=audio_file,
-                model=whisper_model,
-                language="ja",
-                response_format="verbose_json"
-            )
-            
-            # Extract segments
-            segments = transcription.segments if hasattr(transcription, 'segments') else []
-            
-            if not segments:
-                print("Tidak ada segmen ditemukan, mencoba format text...")
-                # Fallback to text
-                audio_file.seek(0)
-                transcription = client.audio.transcriptions.create(
-                    file=audio_file,
-                    model=whisper_model,
-                    language="ja"
-                )
-                
-                # Create single segment from text
-                if hasattr(transcription, 'text') and transcription.text:
-                    segments = [{
-                        'start': 0,
-                        'end': 10,  # Default duration
-                        'text': transcription.text
-                    }]
-                else:
-                    print("Tidak ada hasil transkripsi.")
-                    return []
-            
-            print(f"Transkripsi selesai! Total segmen: {len(segments)}")
-            
-            # Format segments properly
-            formatted_segments = []
-            for seg in segments:
-                if hasattr(seg, 'start'):
-                    start_time = seg.start
-                    end_time = seg.end
-                    text = seg.text
-                elif isinstance(seg, dict):
-                    start_time = seg.get('start', 0)
-                    end_time = seg.get('end', 0)
-                    text = seg.get('text', '')
-                else:
-                    continue
-                
-                formatted_segments.append({
-                    'start': start_time,
-                    'end': end_time,
-                    'text': text.strip()
-                })
-            
-            return formatted_segments
-            
-        except Exception as e:
-            print(f"Error saat transkripsi: {str(e)}")
-            return []
+    print(f"Model: {whisper_model}")
+
+    segments = transcribe_local(input_file, whisper_model, device, compute_type)
+
+    if not segments:
+        print("Tidak ada segmen ditemukan.")
+        return []
+
+    return segments
 
 # NEW: Translate SRT file method
 def process_translate_srt_method(client, input_srt, model, batch_size=5):
