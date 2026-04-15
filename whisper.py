@@ -378,170 +378,6 @@ def process_transcribe_method(client, input_file, model, whisper_model, batch_si
     return translated_segments
 
 
-def process_translate_method(client, input_file, model, whisper_model, batch_size):
-    """Metode baru: Whisper direct translate, lalu GPT paraphrase dengan batch"""
-    print("Menggunakan metode: Direct Translate + Batch Paraphrase")
-    print(f"Batch size: {batch_size} dialog per batch")
-    print("Menerjemahkan langsung dengan API Whisper...")
-    
-    with open(input_file, "rb") as audio_file:
-        # Try verbose_json first for segments
-        try:
-            translation = client.audio.translations.create(
-                model=whisper_model,
-                file=audio_file,
-                response_format="verbose_json"
-            )
-        except:
-            # Fallback to regular text if verbose_json not supported
-            print("Verbose format tidak tersedia, menggunakan text format...")
-            audio_file.seek(0)  # Reset file pointer
-            translation = client.audio.translations.create(
-                model=whisper_model,
-                file=audio_file
-            )
-    
-    print("Terjemahan Whisper selesai!")
-    
-    # Ekstrak segmen
-    segments = translation.segments if hasattr(translation, 'segments') else []
-    
-    if not segments:
-        # Jika tidak ada segments, coba ambil dari text
-        if hasattr(translation, 'text') and translation.text:
-            print("Warning: Tidak ada timing segments, menggunakan full text")
-            # Buat satu segment dari keseluruhan text
-            # Split by sentences untuk simulasi segments
-            import re
-            sentences = re.split(r'[.!?]+', translation.text)
-            sentences = [s.strip() for s in sentences if s.strip()]
-            
-            # Estimate timing (assume 3 seconds per sentence)
-            segments = []
-            current_time = 0
-            for sent in sentences:
-                segments.append({
-                    'start': current_time,
-                    'end': current_time + 3,
-                    'text': sent
-                })
-                current_time += 3.5
-        else:
-            print("Tidak ada terjemahan yang ditemukan.")
-            return []
-    
-    print(f"Ditemukan {len(segments)} segmen untuk di-paraphrase.")
-    
-    # Process dalam batch
-    paraphrased_segments = []
-    
-    for batch_start in range(0, len(segments), batch_size):
-        batch_end = min(batch_start + batch_size, len(segments))
-        batch_segments = segments[batch_start:batch_end]
-        
-        print(f"\nMemproses batch {batch_start//batch_size + 1} (segmen {batch_start+1}-{batch_end})...")
-        
-        # Gabungkan text dari batch untuk context
-        batch_texts = []
-        for i, seg in enumerate(batch_segments):
-            if hasattr(seg, 'text'):
-                text = seg.text
-            elif isinstance(seg, dict) and 'text' in seg:
-                text = seg.get('text', '')
-            else:
-                text = str(seg)  # Fallback
-            # Remove null bytes and control characters that break JSON serialization
-            text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
-            batch_texts.append(f"[Dialog {i+1}] {text.strip()}")
-
-        combined_text = "\n".join(batch_texts)
-        
-        # Paraphrase batch dengan GPT
-        chat_completion = client.chat.completions.create(
-            model=model,
-            messages=[
-                {
-                    "role": "system", 
-                    "content": "Kamu adalah editor subtitle bahasa Indonesia. "
-                               "Ubah dialog-dialog berikut menjadi bahasa Indonesia yang natural dan mudah dipahami. "
-                               "Gunakan bahasa sehari-hari yang sopan, tidak terlalu formal namun juga tidak terlalu gaul. "
-                               "PENTING: Pertahankan format [Dialog X] dan jaga konteks antar dialog agar nyambung. "
-                               "Setiap dialog harus tetap terpisah dengan format yang sama."
-                },
-                {"role": "user", "content": combined_text}
-            ],
-            temperature=0.6
-        )
-        
-        paraphrased_text = chat_completion.choices[0].message.content.strip()
-        
-        # Parse hasil paraphrase
-        paraphrased_dialogs = {}
-        current_dialog = None
-        current_text = []
-        
-        for line in paraphrased_text.split('\n'):
-            if line.strip().startswith('[Dialog'):
-                # Save previous dialog if exists
-                if current_dialog is not None:
-                    paraphrased_dialogs[current_dialog] = ' '.join(current_text).strip()
-                
-                # Extract dialog number
-                try:
-                    dialog_num = int(line.split(']')[0].split()[-1])
-                    current_dialog = dialog_num
-                    # Extract text after [Dialog X]
-                    text_after = line.split(']', 1)[1].strip() if ']' in line else ''
-                    current_text = [text_after] if text_after else []
-                except:
-                    continue
-            elif current_dialog is not None and line.strip():
-                current_text.append(line.strip())
-        
-        # Save last dialog
-        if current_dialog is not None:
-            paraphrased_dialogs[current_dialog] = ' '.join(current_text).strip()
-        
-        # Create segments dengan text yang di-paraphrase
-        for i, seg in enumerate(batch_segments):
-            dialog_num = i + 1
-            paraphrased = paraphrased_dialogs.get(dialog_num, '')
-            
-            # Fallback ke text original jika parsing gagal
-            if not paraphrased:
-                if hasattr(seg, 'text'):
-                    original_text = seg.text
-                elif isinstance(seg, dict) and 'text' in seg:
-                    original_text = seg.get('text', '')
-                else:
-                    original_text = str(seg)
-                paraphrased = original_text
-            
-            # Extract timing info safely
-            if hasattr(seg, 'start'):
-                start_time = seg.start
-                end_time = seg.end
-            elif isinstance(seg, dict):
-                start_time = seg.get('start', 0)
-                end_time = seg.get('end', 0)
-            else:
-                start_time = 0
-                end_time = 0
-            
-            new_segment = {
-                "start": start_time,
-                "end": end_time,
-                "text": paraphrased
-            }
-            
-            paraphrased_segments.append(new_segment)
-        
-        # Delay antar batch
-        if batch_end < len(segments):
-            time.sleep(1)
-    
-    return paraphrased_segments
-
 def main():
     parser = argparse.ArgumentParser(description="Transcribe/Translate Japanese audio/SRT to Indonesian")
     
@@ -559,21 +395,27 @@ def main():
     parser.add_argument("--model", default="gpt-3.5-turbo", 
                         help="Model OpenAI untuk translasi (default: gpt-3.5-turbo). "
                              "Opsi: gpt-3.5-turbo, gpt-4, gpt-4-turbo-preview, gpt-4o, gpt-4o-mini")
-    parser.add_argument("--whisper-model", default="whisper-1", 
-                        help="Model Whisper untuk transkrip (default: whisper-1)")
+    parser.add_argument("--whisper-model", default="kotoba-tech/kotoba-whisper-v2.0",
+                        help="Model Whisper lokal (default: kotoba-tech/kotoba-whisper-v2.0)")
     
-    # Method selection - UPDATED with new options
-    parser.add_argument("--method", default="transcribe", 
-                        choices=["transcribe", "translate", "transcribe-only", "translate-srt"],
+    # Method selection
+    parser.add_argument("--method", default="transcribe",
+                        choices=["transcribe", "transcribe-only", "translate-srt"],
                         help="Metode processing:\n"
                              "'transcribe' - transcribe Japanese + translate to Indonesian\n"
-                             "'translate' - direct translate + paraphrase\n"
                              "'transcribe-only' - transcribe Japanese only (no translation)\n"
                              "'translate-srt' - translate existing Japanese SRT to Indonesian")
     
     parser.add_argument("--batch-size", type=int, default=5,
                         help="Jumlah dialog/subtitle per batch untuk translasi (default: 5)")
-    
+
+    parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"],
+                        help="Device untuk model Whisper (default: cuda)")
+
+    parser.add_argument("--compute-type", default="float16",
+                        choices=["float16", "int8", "float32"],
+                        help="Compute type untuk model Whisper (default: float16)")
+
     args = parser.parse_args()
     
     # Validate input based on method
@@ -599,30 +441,22 @@ def main():
         print(f"Error: File {input_file} tidak ditemukan!")
         return
     
-    # Get API key for methods that need it
+    # Get API key (only needed for methods that use GPT translation)
+    needs_api = method in ("transcribe", "translate-srt")
     api_key = None
-    if method != "transcribe-only" or method == "translate-srt":  # These methods need API key
+
+    if needs_api:
         api_key = args.api_key
         if not api_key:
             api_key = get_api_key_from_config(args.config)
-            if not api_key and method != "transcribe-only":
-                print(f"Error: API key diperlukan untuk metode '{method}'.")
-                print(f"Silakan tentukan API key melalui argument --api_key atau di file {args.config}")
-                print(f"\nFormat file config.ini:")
-                print("[OPENAI]")
-                print("api_key = sk-your_openai_api_key_here")
-                print("model = gpt-4o  # opsional")
-                return
-    
-    # For transcribe-only, we still need API key
-    if method == "transcribe-only":
-        api_key = args.api_key
         if not api_key:
-            api_key = get_api_key_from_config(args.config)
-            if not api_key:
-                print(f"Error: API key diperlukan untuk metode 'transcribe-only'.")
-                print(f"Silakan tentukan API key melalui argument --api_key atau di file {args.config}")
-                return
+            print(f"Error: API key diperlukan untuk metode '{method}'.")
+            print(f"Silakan tentukan API key melalui argument --api_key atau di file {args.config}")
+            print(f"\nFormat file config.ini:")
+            print("[OPENAI]")
+            print("api_key = sk-your_openai_api_key_here")
+            print("model = gpt-4o  # opsional")
+            return
     
     # Get model preference
     model = args.model
@@ -633,13 +467,17 @@ def main():
     
     whisper_model = args.whisper_model
     batch_size = args.batch_size
+    device = args.device
+    compute_type = args.compute_type
     
-    # Initialize OpenAI client
-    try:
-        client = OpenAI(api_key=api_key)
-    except Exception as e:
-        print(f"Error inisialisasi OpenAI client: {str(e)}")
-        return
+    # Initialize OpenAI client only if needed
+    client = None
+    if needs_api:
+        try:
+            client = OpenAI(api_key=api_key)
+        except Exception as e:
+            print(f"Error inisialisasi OpenAI client: {str(e)}")
+            return
     
     # Process based on selected method
     print(f"\n{'='*60}")
@@ -647,60 +485,26 @@ def main():
     
     try:
         if method == "transcribe-only":
-            # Transcribe only (no translation)
-            mime_type = get_mime_type(input_file)
-            print(f"Format audio: {mime_type}")
-            
-            # Check file size
-            file_size = os.path.getsize(input_file)
-            print(f"Ukuran file: {file_size / 1024 / 1024:.1f} MB")
-            
-            if file_size > 25 * 1024 * 1024:
-                print("WARNING: File melebihi batas 25MB! API akan menolak file ini.")
-                print("Gunakan split_audio.py untuk membagi file terlebih dahulu.")
-                return
-            
-            segments = process_transcribe_only_method(client, input_file, whisper_model)
-            
+            print(f"Model Whisper: {whisper_model}")
+            print(f"Device: {device} ({compute_type})")
+
+            segments = process_transcribe_only_method(input_file, whisper_model, device, compute_type)
+
         elif method == "translate-srt":
-            # Translate existing SRT file
             print(f"Metode: Translate SRT")
             print(f"Model translasi: {model}")
             segments = process_translate_srt_method(client, input_file, model, batch_size)
-            
+
         elif method == "transcribe":
-            # Original transcribe + translate method
-            mime_type = get_mime_type(input_file)
-            print(f"Format audio: {mime_type}")
-            print(f"Model translasi: {model}")
             print(f"Model Whisper: {whisper_model}")
-            
+            print(f"Model translasi: {model}")
+            print(f"Device: {device} ({compute_type})")
+
             # Check file size
             file_size = os.path.getsize(input_file)
             print(f"Ukuran file: {file_size / 1024 / 1024:.1f} MB")
-            
-            if file_size > 25 * 1024 * 1024:
-                print("WARNING: File melebihi batas 25MB! API akan menolak file ini.")
-                return
-            
-            segments = process_transcribe_method(client, input_file, model, whisper_model, batch_size)
-            
-        else:  # method == "translate"
-            # Direct translate + paraphrase method
-            mime_type = get_mime_type(input_file)
-            print(f"Format audio: {mime_type}")
-            print(f"Model translasi: {model}")
-            print(f"Model Whisper: {whisper_model}")
-            
-            # Check file size
-            file_size = os.path.getsize(input_file)
-            print(f"Ukuran file: {file_size / 1024 / 1024:.1f} MB")
-            
-            if file_size > 25 * 1024 * 1024:
-                print("WARNING: File melebihi batas 25MB! API akan menolak file ini.")
-                return
-            
-            segments = process_translate_method(client, input_file, model, whisper_model, batch_size)
+
+            segments = process_transcribe_method(client, input_file, model, whisper_model, batch_size, device, compute_type)
         
         # Check if we got segments
         if not segments:
