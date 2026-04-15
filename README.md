@@ -61,9 +61,9 @@ python whisper.py --input japanese.srt --output indonesian.srt --method translat
 | `--output` | `output.srt` | Output SRT file |
 | `--method` | `transcribe` | `transcribe`, `transcribe-only`, or `translate-srt` |
 | `--model` | `gpt-3.5-turbo` | OpenAI model for translation |
-| `--whisper-model` | `kotoba-tech/kotoba-whisper-v2.0` | Local Whisper model name or path |
+| `--whisper-model` | `jctv-tech/kotoba-whisper-v21-ct2` | Local Whisper model name or path |
 | `--device` | `cuda` | `cuda` or `cpu` |
-| `--compute-type` | `float16` | `float16`, `int8`, or `float32` |
+| `--compute-type` | `int8` | `float16`, `int8`, or `float32` |
 | `--batch-size` | `5` | Dialogs per translation batch |
 | `--api_key` | from config.ini | OpenAI API key |
 

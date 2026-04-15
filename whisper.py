@@ -135,7 +135,7 @@ def get_mime_type(filename):
     }
     return mime_types.get(ext, 'audio/wav')
 
-def transcribe_local(audio_path, model_name="kotoba-tech/kotoba-whisper-v2.0", device="cuda", compute_type="float16"):
+def transcribe_local(audio_path, model_name="jctv-tech/kotoba-whisper-v21-ct2", device="cuda", compute_type="int8"):
     """Transcribe Japanese audio using local faster-whisper model.
 
     Returns list of segments with 'start', 'end', 'text' keys.
@@ -395,8 +395,8 @@ def main():
     parser.add_argument("--model", default="gpt-3.5-turbo", 
                         help="Model OpenAI untuk translasi (default: gpt-3.5-turbo). "
                              "Opsi: gpt-3.5-turbo, gpt-4, gpt-4-turbo-preview, gpt-4o, gpt-4o-mini")
-    parser.add_argument("--whisper-model", default="kotoba-tech/kotoba-whisper-v2.0",
-                        help="Model Whisper lokal (default: kotoba-tech/kotoba-whisper-v2.0)")
+    parser.add_argument("--whisper-model", default="jctv-tech/kotoba-whisper-v21-ct2",
+                        help="Model Whisper lokal (default: jctv-tech/kotoba-whisper-v21-ct2)")
     
     # Method selection
     parser.add_argument("--method", default="transcribe",
@@ -412,9 +412,9 @@ def main():
     parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"],
                         help="Device untuk model Whisper (default: cuda)")
 
-    parser.add_argument("--compute-type", default="float16",
+    parser.add_argument("--compute-type", default="int8",
                         choices=["float16", "int8", "float32"],
-                        help="Compute type untuk model Whisper (default: float16)")
+                        help="Compute type untuk model Whisper (default: int8)")
 
     args = parser.parse_args()
     
