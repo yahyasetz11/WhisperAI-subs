@@ -147,11 +147,9 @@ def transcribe_local(audio_path, model_name="jctv-tech/kotoba-whisper-v21-ct2", 
     segments_iter, info = model.transcribe(
         audio_path,
         language="ja",
-        vad_filter=True,
-        vad_parameters=dict(
-            min_silence_duration_ms=500,
-            speech_pad_ms=200,
-        ),
+        vad_filter=False,
+        condition_on_previous_text=False,
+        beam_size=5,
     )
 
     print(f"Detected language: {info.language} (probability: {info.language_probability:.2f})")
