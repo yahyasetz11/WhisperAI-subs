@@ -1,3 +1,5 @@
 config.ini
 .claude/
 *.mp3
+*.srt
+*.ass
